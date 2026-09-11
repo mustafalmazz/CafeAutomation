@@ -8,7 +8,7 @@ public static class DemoData
     {
         var state = new CafeState();
         void Add(string id, string name, string category, decimal price, string description, string art, string color, bool featured = false) =>
-            state.Products.Add(new Product { Id = id, Name = name, Category = category, Price = price, Description = description, Art = art, Color = color, Featured = featured });
+            state.Products.Add(new Product { Id = id, PhotoKey = id, Name = name, Category = category, Price = price, Description = description, Art = art, Color = color, Featured = featured });
         Add("latte", "Caffè Latte", "Kahveler", 145, "Espresso, kadifemsi süt köpüğü", "coffee", "#EADACA", true);
         Add("flat", "Flat White", "Kahveler", 150, "Çift shot, ince dokulu süt", "coffee", "#DDDCCF", true);
         Add("americano", "Americano", "Kahveler", 110, "Dengeli ve yoğun espresso", "dark", "#D8D0C3");

@@ -1,35 +1,18 @@
-# Ürün yol haritası
+# Güncel kapsam · 0.3.0
 
-## 0.1 — Tasarım ve çalışan satış çekirdeği (mevcut)
+Personel/PIN/rol, yönetici onayı, vardiya ve kasa, gerekçeli adisyon düzeltmeleri ve manuel iadeler, ürün bazında bölme/birleştirme, temel ve seçenek reçeteleri, fire/sayım, sadakat kazanımı/kullanımı, kuponlar, tarih ve maliyet raporları, yerel QR istekleri, HTTPS personel terminali, Windows yazıcı ayarları ve yedekten dönüş uygulanmıştır.
 
-Espresso/krem/bakır tasarım sistemi; uyarlanabilir WPF ekranları; örnek ürünler; masa, sipariş, hazırlık ve tutar bazında bölünmüş tahsilat; menü yönetimi; günlük rapor; tek cihazda kalıcı kayıt ve yedek.
+Çalışan akışlar ve sınırlamalar README.md ile OPERATIONS.md içindedir.
 
-## 0.2 — İşletme operasyonu
+SQL Server'a geçiş tamamlanmıştır: 19 ilişkisel tablo, EF Core migration, eski verinin doğrulamalı aktarımı, transaction, çakışma kontrolü, bağlantı ayarları ve doğrulanan SQL yedeği. Kurulum ve işletim ayrıntıları SQL_SERVER.md içindedir.
 
-1. Kimlik doğrulama, rol/işlem yetkileri ve kritik işlem onayı.
-2. Kalıcı veritabanı ve sürümlü veri geçişi. Mevcut örnek veriler ayrı kalır; gerçek işletme kurulumu açılır.
-3. Nedenli iptal, ikram, indirim, kısmi/tam iade ve tutarlı ters kayıtlar.
-4. Vardiya açılışı, kasa giriş/çıkışları, beklenen/sayılan nakit ve kapanış.
-5. Ürün bazında özelleştirilebilir seçenek grupları, vergi kuralları ve fiyat listeleri.
-6. Bar/mutfak istasyon yönlendirmesi, ayrı hazırlık takibi ve yazıcı kuyruğu.
-7. İlk pilot: gerçek kasa, dokunmatik ekran, yazıcı, elektrik/kesinti ve geri yükleme kontrolleri.
+## Harici bağımlılık nedeniyle saha aşamasında
 
-Kabul: aynı işlemin tekrarı mükerrer tahsilat/stok hareketi üretmez; iptal/iade izlenebilir; vardiya tutarları ödeme kayıtlarıyla uzlaşır.
+- Gerçek banka POS ve mali fiş/ÖKC/e-belge: cihaz ve sağlayıcı belirlenmedi; canlı adaptör yok.
+- Fiziksel yazıcı, tablet, dokunmatik POS, ağ kesintisi ve tesis içi TLS kurulumu: saha donanımı üzerinde doğrulanmalı.
 
-## 0.3 — Stok ve maliyet
+## Bu sürümün dışındaki ürün geliştirmeleri
 
-Malzeme/birim dönüşümleri, reçete ve seçenek tüketimleri, alış maliyeti, tedarikçi/mal kabul, fire ve sayım, kritik stok uyarısı, ürün katkı payı. Net kâr için işletme giderleri ayrıca dahil edilir.
+Çoklu şube, merkezi bulut yönetimi, yüksek erişilebilir veritabanı, otomatik güncelleme/lisanslama, tedarikçi siparişleri ve mal kabul, birim dönüşümleri, özelleştirilebilir vergi/ürün seçenek grupları, otomatik termal yazıcı kuyruğu, mesajlaşma/yemek platformu entegrasyonları ve işletme giderleri dahil net kâr.
 
-Kabul: satış, iptal ve iadelerde malzeme hareketleri tutarlı; stok sayımı ve maliyet hesapları doğrulanmış örneklerle uzlaşır.
-
-## 0.4 — Müşteri ve büyüme
-
-Sadakat kartı/puan/damga, izin ve iletişim tercihleri, süre/kullanım sınırı olan kampanyalar ve kullanım raporu. Ortak ürün kaynağıyla mobil QR menü; daha sonra masa doğrulamalı sipariş ve servis çağrısı.
-
-## 0.5 — Ağ, entegrasyonlar ve ticari paket
-
-Yerel API ve çoklu kasa/garson terminali; bağlantı kaybı ve eşzamanlı işlem senaryoları. Sağlayıcı erişimi ve gerekli doğrulamalarla banka POS'u, ÖKC/e-belge, yemek platformları ve mesajlaşma. Kurulum/güncelleme/geri alma, lisanslama, destek, veri taşıma ve tanıtım materyalleri.
-
-## 1.0 — Pilot sonrası
-
-Gerçek işletmede kabul edilen çekirdek; şube yönetimi, merkezi menü, kampanya ölçümü. Tahmin/öneri özellikleri yeterli veri oluştuktan sonra eklenir. Kullanıcı ve donanım geri bildirimlerine göre ekran akışları iyileştirilir.
+Mevcut yerel pilot; banka, mali cihaz ve çoklu şube entegrasyonları tamamlanmış bir ticari paket olarak sunulmamalıdır.

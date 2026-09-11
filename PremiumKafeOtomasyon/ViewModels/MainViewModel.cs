@@ -13,7 +13,7 @@ public sealed record ProductCard(Product Product)
     public string Category => Product.Category;
     public string Description => Product.Description;
     public string Price => Money.Format(Product.Price);
-    public string Art => Product.Art;
+    public string PhotoKey => ProductPhotos.ResolveKey(Product);
     public string Color => Product.Color;
     public bool Available => Product.Available;
     public string Badge => !Available ? "Tükendi" : Product.Featured ? "ÇOK SEVİLEN" : Category;
@@ -39,11 +39,12 @@ public sealed record LineCard(OrderLine Line)
     public string Status => Line.Status;
     public bool Editable => Line.Status == "Taslak";
 }
-public sealed record KitchenCard(Order Order, string Table)
+public sealed record KitchenCard(Order Order, string Table, string Station = "Tümü")
 {
     public string Number => "#" + Order.Number;
-    public string Time => $"{Math.Max(1, (int)(DateTimeOffset.Now - Order.OpenedAt).TotalMinutes)} dk önce";
-    public List<OrderLine> Lines => Order.Lines.Where(l => l.Status is not "Taslak" and not "Teslim edildi").ToList();
+    public int WaitingMinutes => Math.Max(1,(int)(DateTimeOffset.Now - (Lines.Where(l=>l.SentAt!=null).Select(l=>l.SentAt!.Value).DefaultIfEmpty(Order.OpenedAt).Min())).TotalMinutes);
+    public string Time => WaitingMinutes + " dk" + (WaitingMinutes>=15?" · GECİKİYOR":" · hazırlık sırası");
+    public List<OrderLine> Lines => Order.Lines.Where(l => (Station == "Tümü" || l.Station == Station) && l.Status is not "Taslak" and not "Teslim edildi" and not "İptal").ToList();
     public string Status => Lines.Any(l => l.Status == "Yeni") ? "Yeni sipariş" : Lines.Any(l => l.Status == "Hazırlanıyor") ? "Hazırlanıyor" : "Servise hazır";
     public string StatusBackground => Lines.Any(l => l.Status == "Yeni") ? "#F4E6D9" : Lines.Any(l => l.Status == "Hazırlanıyor") ? "#EEE9DB" : "#E4EDE5";
     public string StatusColor => Lines.Any(l => l.Status == "Yeni") ? "#995A38" : Lines.Any(l => l.Status == "Hazırlanıyor") ? "#866A34" : "#41634E";
@@ -55,13 +56,23 @@ public sealed record RankedProduct(string Name, string Category, int Quantity, s
 public sealed class MainViewModel : ObservableObject
 {
     public CafeService Service { get; }
+    public GuestMenuServer GuestServer { get; }
     public Action<Product, bool>? ProductRequested { get; set; }
+    public Action<string>? OperationsRequested { get; set; }
+    public ICommand OperationsCommand => new RelayCommand(p => OperationsRequested?.Invoke((string)p!));
+    public Action? PosRequested { get; set; }
+    public ICommand PosCommand => new RelayCommand(_ => PosRequested?.Invoke());
     public Action? PaymentRequested { get; set; }
     public Action? MoveRequested { get; set; }
     public Action? BackupRequested { get; set; }
     public Action? ExportRequested { get; set; }
     public Action? PrintRequested { get; set; }
 
+    private string _station = "Tümü";
+    public string[] Stations { get; } = ["Tümü", "Bar", "Mutfak"];
+    public string Station { get => _station; set { Set(ref _station,value); Refresh(); } }
+    public string SessionLabel => Service.CurrentEmployee is { } e ? e.Name + " · " + e.Role : "Yerel demo";
+    public string GuestNotice => Service.State.GuestRequests.Count(r => r.Status == "Bekliyor") + " masa isteği";
     private string _page = "Satış";
     private string _search = "";
     private string _category = "Tümü";
@@ -75,9 +86,9 @@ public sealed class MainViewModel : ObservableObject
 
     public MainViewModel(CafeService service)
     {
-        Service = service;
+        Service = service; GuestServer = new GuestMenuServer(service);
         _businessDraft = service.State.BusinessName;
-        NavigateCommand = new RelayCommand(p => { Page = (string)p!; _category = "Tümü"; Search = ""; Refresh(); });
+        NavigateCommand = new RelayCommand(p => { if ((string)p! is "Raporlar" or "Menü" && !Service.CanManage) { Notify("Bu alan için yönetici girişi gerekli.",true); return; } Page = (string)p!; _category = "Tümü"; Search = ""; Refresh(); });
         CategoryCommand = new RelayCommand(p => { _category = p is CategoryItem c ? c.Name : (string)p!; Refresh(); });
         AreaCommand = new RelayCommand(p => { Area = (string)p!; });
         SelectTableCommand = new RelayCommand(p => { _tableId = ((TableCard)p!).Id; Page = "Satış"; Refresh(); });
@@ -89,7 +100,7 @@ public sealed class MainViewModel : ObservableObject
         SendCommand = new RelayCommand(_ => Run(() => Service.SendToKitchen(CurrentOrder!.Id), "Sipariş hazırlık ekranına gönderildi."), _ => CurrentOrder?.Lines.Any(l => l.Status == "Taslak") == true);
         PayCommand = new RelayCommand(_ => PaymentRequested?.Invoke(), _ => CurrentOrder?.Remaining > 0 && !CurrentOrder.Lines.Any(l => l.Status == "Taslak"));
         MoveCommand = new RelayCommand(_ => MoveRequested?.Invoke(), _ => CurrentOrder is not null);
-        AdvanceKitchenCommand = new RelayCommand(p => Run(() => Service.AdvanceKitchen(((KitchenCard)p!).Order.Id), "Hazırlık durumu güncellendi."));
+        AdvanceKitchenCommand = new RelayCommand(p => Run(() => Service.AdvanceKitchen(((KitchenCard)p!).Order.Id, Station), "Hazırlık durumu güncellendi."));
         BackupCommand = new RelayCommand(_ => BackupRequested?.Invoke());
         ExportCommand = new RelayCommand(_ => ExportRequested?.Invoke());
         PrintCommand = new RelayCommand(_ => PrintRequested?.Invoke(), _ => CurrentOrder is not null);
@@ -100,7 +111,7 @@ public sealed class MainViewModel : ObservableObject
 
     public string Page { get => _page; set { Set(ref _page, value); Raise(nameof(PageTitle)); Raise(nameof(PageSubtitle)); } }
     public string PageTitle => Page switch { "Masalar" => "Her masa, yeni bir hikâye.", "Hazırlık" => "İyi servis, iyi bir ritim.", "Raporlar" => "İşletmenizin nabzı.", "Menü" => "Menünüzün karakteri.", "Ayarlar" => "Her şey yerli yerinde.", _ => "Güzel bir servis başlasın." };
-    public string PageSubtitle => Page switch { "Masalar" => "Alanlarınızı ve açık hesaplarınızı tek bakışta yönetin.", "Hazırlık" => "Bar ve mutfak siparişlerini hazırlıktan teslime takip edin.", "Raporlar" => "Bugünün gerçekleşen satışları ve tahsilatları.", "Menü" => "Ürünleri, fiyatları ve satışa uygunluk durumunu düzenleyin.", "Ayarlar" => "İşletme bilgileri, yerel kayıtlar ve cihaz seçenekleri.", _ => "Misafirlerinize odaklanın. Detaylar burada." };
+    public string PageSubtitle => Page switch { "Masalar" => "Alanlarınızı ve açık hesaplarınızı tek bakışta yönetin.", "Hazırlık" => "Bar ve mutfak siparişlerini hazırlıktan teslime takip edin.", "Raporlar" => "Günlük, haftalık, aylık ve yıllık satışları takip edin.", "Menü" => "Ürünleri, fiyatları ve satışa uygunluk durumunu düzenleyin.", "Ayarlar" => "İşletme bilgileri, yerel kayıtlar ve cihaz seçenekleri.", _ => "Misafirlerinize odaklanın. Detaylar burada." };
     public string Search { get => _search; set { if (Set(ref _search, value)) RefreshProducts(); } }
     public string SelectedCategory => _category;
     public string Area { get => _area; set { Set(ref _area, value); Refresh(); } }
@@ -125,15 +136,54 @@ public sealed class MainViewModel : ObservableObject
     public int OccupiedTables => Service.State.Orders.Count(o => o.IsOpen && o.TableId != "takeaway");
     public int EmptyTables => Service.State.Tables.Count(t => t.Id != "takeaway") - OccupiedTables;
     public int PendingCount => Service.State.Orders.Count(o => o.Lines.Any(l => l.Status is "Yeni" or "Hazırlanıyor" or "Hazır"));
-    public int ClosedCount => TodayClosed.Count;
-    private List<Order> TodayClosed => Service.State.Orders.Where(o => o.ClosedAt?.LocalDateTime.Date == DateTime.Today).ToList();
-    private List<Payment> TodayPayments => Service.State.Orders.SelectMany(o => o.Payments).Where(p => p.At.LocalDateTime.Date == DateTime.Today).ToList();
-    public string Revenue => Money.Format(TodayClosed.Sum(o => o.Total));
-    public string Collected => Money.Format(TodayPayments.Sum(p => p.Amount));
-    public string Cash => Money.Format(TodayPayments.Where(p => p.Method == "Nakit").Sum(p => p.Amount));
-    public string Card => Money.Format(TodayPayments.Where(p => p.Method == "Kart").Sum(p => p.Amount));
-    public string Other => Money.Format(TodayPayments.Where(p => p.Method == "Diğer").Sum(p => p.Amount));
-    public string Average => Money.Format(ClosedCount == 0 ? 0 : TodayClosed.Sum(o => o.Total) / ClosedCount);
+    public int ClosedCount => PeriodClosed.Count;
+    public string[] ReportPeriods { get; } = ["Günlük", "Haftalık", "Aylık", "Yıllık"];
+    private string _reportPeriod = "Günlük";
+    private DateTime _reportDate = DateTime.Today;
+    public string ReportPeriod { get => _reportPeriod; set { if (!ReportPeriods.Contains(value)) return; _reportPeriod = value; Refresh(); Raise(nameof(ReportPeriod)); Raise(nameof(ReportRangeLabel)); } }
+    public DateTime ReportDate { get => _reportDate; set { _reportDate = value.Date; Refresh(); Raise(nameof(ReportDate)); Raise(nameof(ReportRangeLabel)); } }
+    public DateTime ReportStart => ReportPeriod switch { "Haftalık" => ReportDate.AddDays(-((7 + (int)ReportDate.DayOfWeek - (int)DayOfWeek.Monday) % 7)), "Aylık" => new DateTime(ReportDate.Year, ReportDate.Month, 1), "Yıllık" => new DateTime(ReportDate.Year, 1, 1), _ => ReportDate };
+    public DateTime ReportEndExclusive => ReportPeriod switch { "Haftalık" => ReportStart.AddDays(7), "Aylık" => ReportStart.AddMonths(1), "Yıllık" => ReportStart.AddYears(1), _ => ReportStart.AddDays(1) };
+    public string YearlyRevenue => Money.Format(Service.State.Orders.Where(o => o.ClosedAt?.LocalDateTime.Year == ReportDate.Year).Sum(o => o.Total));
+    public string YearlyRevenueLabel => $"{ReportDate.Year} · YILLIK HASILAT";
+    public sealed record ProductHighlight(string Title, string Range, string Name, string Detail);
+    public ObservableCollection<ProductHighlight> ProductHighlights { get; } = [];
+    private void RefreshProductHighlights()
+    {
+        ProductHighlights.Clear();
+        var week = ReportDate.AddDays(-((7 + (int)ReportDate.DayOfWeek - 1) % 7));
+        var month = new DateTime(ReportDate.Year, ReportDate.Month, 1);
+        var year = new DateTime(ReportDate.Year, 1, 1);
+        foreach (var period in new[] { (Title:"HAFTANIN ÜRÜNÜ", Start:week, End:week.AddDays(7)), (Title:"AYIN ÜRÜNÜ", Start:month, End:month.AddMonths(1)), (Title:"YILIN ÜRÜNÜ", Start:year, End:year.AddYears(1)) })
+        {
+            var best = Service.State.Orders.Where(o => o.ClosedAt is {} at && at.LocalDateTime >= period.Start && at.LocalDateTime < period.End)
+                .SelectMany(o => o.Lines).Where(l => l.Status != "İptal" && !l.Complimentary && l.Total > 0)
+                .GroupBy(l => l.ProductId).Select(g => new { Name=g.First().Name, Quantity=g.Sum(l=>l.Quantity), Id=g.Key })
+                .OrderByDescending(p=>p.Quantity).ThenBy(p=>p.Name,StringComparer.Ordinal).ThenBy(p=>p.Id,StringComparer.Ordinal).FirstOrDefault();
+            ProductHighlights.Add(new(period.Title, $"{period.Start:dd.MM.yyyy} — {period.End.AddDays(-1):dd.MM.yyyy}", best?.Name ?? "Henüz satış yok", best is null ? "Tamamlanan satışlarla oluşur" : $"{best.Quantity} adet · En çok satılan"));
+        }
+        Raise(nameof(YearlyRevenue)); Raise(nameof(YearlyRevenueLabel));
+    }
+    public string ReportRangeLabel => $"{ReportStart:dd.MM.yyyy} — {ReportEndExclusive.AddDays(-1):dd.MM.yyyy}";
+    private bool InReport(DateTimeOffset at) => at.LocalDateTime >= ReportStart && at.LocalDateTime < ReportEndExclusive;
+    private List<Order> PeriodClosed => Service.State.Orders.Where(o => o.ClosedAt is { } at && InReport(at)).ToList();
+    private List<Payment> PeriodPayments => Service.State.Orders.SelectMany(o => o.Payments).Where(p => InReport(p.At)).ToList();
+    public string Revenue => Money.Format(PeriodClosed.Sum(o => o.Total));
+    public string Refunded => Money.Format(Service.State.Refunds.Where(r=>InReport(r.At)).Sum(r=>r.Amount));
+    public string Collected => Money.Format(PeriodPayments.Sum(p => p.Amount));
+    public string Cash => Money.Format(PeriodPayments.Where(p => p.Method == "Nakit").Sum(p => p.Amount));
+    public string Card => Money.Format(PeriodPayments.Where(p => p.Method == "Kart").Sum(p => p.Amount));
+    public string Other => Money.Format(PeriodPayments.Where(p => p.Method == "Diğer").Sum(p => p.Amount));
+    private double PaymentShare(string method)
+    {
+        var payments = PeriodPayments;
+        var total = payments.Sum(p => p.Amount);
+        return total == 0 ? 0 : (double)(payments.Where(p => p.Method == method).Sum(p => p.Amount) / total * 100);
+    }
+    public double CashShare => PaymentShare("Nakit");
+    public double CardShare => PaymentShare("Kart");
+    public double OtherShare => PaymentShare("Diğer");
+    public string Average => Money.Format(ClosedCount == 0 ? 0 : PeriodClosed.Sum(o => o.Total) / ClosedCount);
     public string OpenTotal => Money.Format(Service.State.Orders.Where(o => o.IsOpen).Sum(o => o.Remaining));
     public string ProductCount => Products.Count + " ürün";
     public string DataPath => Service.DataPath;
@@ -164,6 +214,15 @@ public sealed class MainViewModel : ObservableObject
     public ICommand PayCommand { get; }
     public ICommand MoveCommand { get; }
     public ICommand AdvanceKitchenCommand { get; }
+    public ICommand AdvanceLineCommand => new RelayCommand(p =>
+    {
+        var line = (OrderLine)p!;
+        if (Run(() => Service.AdvanceLine(line.Id), "Ürün hazırlığı güncellendi."))
+        {
+            var updated = Service.State.Orders.SelectMany(o => o.Lines).Single(l => l.Id == line.Id);
+            Notify($"{updated.Name} · {updated.Status}");
+        }
+    });
     public ICommand BackupCommand { get; }
     public ICommand ExportCommand { get; }
     public ICommand PrintCommand { get; }
@@ -190,18 +249,20 @@ public sealed class MainViewModel : ObservableObject
 
     public void Refresh()
     {
+        if (Page is "Raporlar" or "Menü" && !Service.CanManage) Page = "Satış";
         Categories.Clear(); Categories.Add(new("Tümü", Service.State.Products.Count, _category == "Tümü"));
         foreach (var g in Service.State.Products.GroupBy(p => p.Category)) Categories.Add(new(g.Key, g.Count(), _category == g.Key));
         RefreshProducts();
         Tables.Clear();
         foreach (var t in Service.State.Tables.Where(t => Area == "Tüm alanlar" || t.Area == Area)) Tables.Add(new(t, Service.OpenOrder(t.Id), t.Id == _tableId));
         Lines.Clear(); foreach (var l in CurrentOrder?.Lines ?? []) Lines.Add(new(l));
-        Kitchen.Clear(); foreach (var o in Service.State.Orders.Where(o => o.Lines.Any(l => l.Status is "Yeni" or "Hazırlanıyor" or "Hazır")).OrderBy(o => o.OpenedAt)) Kitchen.Add(new(o, Service.State.Tables.First(t => t.Id == o.TableId).Name));
-        Sales.Clear(); foreach (var o in TodayClosed.OrderByDescending(o => o.ClosedAt)) Sales.Add(new("#" + o.Number, Service.State.Tables.First(t => t.Id == o.TableId).Name, o.ClosedAt!.Value.ToLocalTime().ToString("HH:mm"), Money.Format(o.Total), string.Join(" + ", o.Payments.Select(p => p.Method).Distinct())));
-        var ranked = TodayClosed.SelectMany(o => o.Lines).GroupBy(l => l.ProductId).Select(g => new { Name = g.First().Name, Category = Service.State.Products.FirstOrDefault(p => p.Id == g.Key)?.Category ?? "", Quantity = g.Sum(l => l.Quantity), Total = g.Sum(l => l.Total) }).OrderByDescending(p => p.Total).Take(5).ToList();
+        Kitchen.Clear(); foreach (var o in Service.State.Orders.Where(o => o.Lines.Any(l => l.Status is "Yeni" or "Hazırlanıyor" or "Hazır")).OrderBy(o => o.OpenedAt)) { var card = new KitchenCard(o, Service.State.Tables.First(t => t.Id == o.TableId).Name, Station); if (card.Lines.Count > 0) Kitchen.Add(card); }
+        RefreshProductHighlights();
+        Sales.Clear(); foreach (var o in PeriodClosed.OrderByDescending(o => o.ClosedAt)) Sales.Add(new("#" + o.Number, Service.State.Tables.First(t => t.Id == o.TableId).Name, o.ClosedAt!.Value.ToLocalTime().ToString("dd.MM.yyyy HH:mm"), Money.Format(o.Total), string.Join(" + ", o.Payments.Select(p => p.Method).Distinct())));
+        var ranked = PeriodClosed.SelectMany(o => o.Lines).Where(l => l.Status != "İptal" && !l.Complimentary).GroupBy(l => l.ProductId).Select(g => new { Name = g.First().Name, Category = Service.State.Products.FirstOrDefault(p => p.Id == g.Key)?.Category ?? "", Quantity = g.Sum(l => l.Quantity), Total = g.Sum(l => l.Total) }).OrderByDescending(p => p.Total).Take(5).ToList();
         Ranking.Clear(); foreach (var p in ranked) Ranking.Add(new(p.Name, p.Category, p.Quantity, Money.Format(p.Total), (double)(p.Total / Math.Max(1, ranked.Max(p => p.Total))) * 220));
         Activity.Clear(); foreach (var a in Service.State.Audit.TakeLast(12).Reverse()) Activity.Add(a);
-        foreach (var name in new[] { nameof(BusinessName), nameof(SelectedCategory), nameof(TableName), nameof(OrderNumber), nameof(OrderMeta), nameof(Subtotal), nameof(Paid), nameof(Remaining), nameof(HasOrder), nameof(HasPayment), nameof(HasDraft), nameof(CartHint), nameof(OccupiedTables), nameof(EmptyTables), nameof(PendingCount), nameof(ClosedCount), nameof(Revenue), nameof(Collected), nameof(Cash), nameof(Card), nameof(Other), nameof(Average), nameof(OpenTotal), nameof(NoKitchen), nameof(NoSales), nameof(DateLabel), nameof(Clock) }) Raise(name);
+        foreach (var name in new[] { nameof(SessionLabel), nameof(GuestNotice), nameof(BusinessName), nameof(SelectedCategory), nameof(TableName), nameof(OrderNumber), nameof(OrderMeta), nameof(Subtotal), nameof(Paid), nameof(Remaining), nameof(HasOrder), nameof(HasPayment), nameof(HasDraft), nameof(CartHint), nameof(OccupiedTables), nameof(EmptyTables), nameof(PendingCount), nameof(ClosedCount), nameof(Revenue), nameof(Collected), nameof(Refunded), nameof(Cash), nameof(Card), nameof(Other), nameof(CashShare), nameof(CardShare), nameof(OtherShare), nameof(Average), nameof(OpenTotal), nameof(NoKitchen), nameof(NoSales), nameof(DateLabel), nameof(Clock) }) Raise(name);
         CommandManager.InvalidateRequerySuggested();
     }
 }

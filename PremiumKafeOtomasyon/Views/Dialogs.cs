@@ -6,6 +6,7 @@ using System.Windows.Media;
 using PremiumKafeOtomasyon.Controls;
 using PremiumKafeOtomasyon.Domain;
 using PremiumKafeOtomasyon.ViewModels;
+using PremiumKafeOtomasyon.Services;
 
 namespace PremiumKafeOtomasyon.Views;
 
@@ -45,7 +46,7 @@ public sealed class ProductDialog : AtelierDialog
     public ProductDialog(MainViewModel vm, Product product, bool edit) : base(edit ? "Menünün bir parçası." : product.Name, edit ? "Ürün bilgileri ve satışa uygunluk" : product.Description)
     {
         if (edit) { BuildEditor(vm, product); return; }
-        var art = new Border { Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(product.Color)), CornerRadius = new CornerRadius(12), Height = 135, Child = new ProductIllustration { Kind = product.Art } };
+        var art = new ProductPhoto { PhotoKey = ProductPhotos.ResolveKey(product), Radius = 12, Height = 135 };
         Body.Children.Add(art);
         var size = Choice(["Standart", "Büyük"], "Standart"); var milk = Choice(["Normal süt", "Yulaf sütü"], "Normal süt"); var shot = new CheckBox { Content = "Ekstra shot  +25,00 ₺" };
         var coffee = product.Category == "Kahveler";
@@ -68,16 +69,21 @@ public sealed class ProductDialog : AtelierDialog
 
     private void BuildEditor(MainViewModel vm, Product product)
     {
-        var name = new TextBox { Text = product.Name, MaxLength = 60 }; var description = new TextBox { Text = product.Description, MaxLength = 160 }; var price = new TextBox { Text = product.Price.ToString("0.00", Money.Turkish) };
+        var name = new TextBox { Tag = "ProductName", Text = product.Name, MaxLength = 60 }; var description = new TextBox { Text = product.Description, MaxLength = 160 }; var price = new TextBox { Tag = "ProductPrice", Text = product.Price.ToString("0.00", Money.Turkish) };
         var category = Choice(["Kahveler", "Soğuk İçecekler", "Çaylar", "Tatlılar", "Atıştırmalıklar"], product.Category);
-        var artwork = Choice(["coffee", "dark", "cold", "lemon", "berry", "cake", "brownie", "cookie", "pastry"], product.Art);
+        var allergens = new TextBox { Text = product.Allergens, MaxLength = 200 }; Body.Children.Add(Label("Alerjen bilgisi (QR menüde görünür)")); Body.Children.Add(allergens);
+        var artwork = new ComboBox { ItemsSource = ProductPhotos.Choices, DisplayMemberPath = nameof(PhotoChoice.Name), SelectedValuePath = nameof(PhotoChoice.Key), SelectedValue = ProductPhotos.ResolveKey(product) };
+        System.Windows.Automation.AutomationProperties.SetName(artwork, "Ürün fotoğrafı");
         var available = new CheckBox { Content = "Satışa açık", IsChecked = product.Available }; var featured = new CheckBox { Content = "Çok sevilen etiketi", IsChecked = product.Featured };
-        foreach (var item in new (string Label, FrameworkElement Field)[] { ("Ürün adı", name), ("Kısa açıklama", description), ("Kategori", category), ("Satış fiyatı (₺)", price), ("Görsel stili", artwork) }) { Body.Children.Add(Label(item.Label)); Body.Children.Add(item.Field); }
+        foreach (var item in new (string Label, FrameworkElement Field)[] { ("Ürün adı", name), ("Kısa açıklama", description), ("Kategori", category), ("Satış fiyatı (₺)", price), ("Ürün fotoğrafı", artwork) }) { Body.Children.Add(Label(item.Label)); Body.Children.Add(item.Field); }
+        var photoPreview = new ProductPhoto { PhotoKey = ProductPhotos.ResolveKey(product), Height = 100, Margin = new Thickness(0, 10, 0, 0) };
+        artwork.SelectionChanged += (_, _) => photoPreview.PhotoKey = (string?)artwork.SelectedValue ?? "latte";
+        Body.Children.Add(photoPreview);
         Body.Children.Add(available); Body.Children.Add(featured);
         var save = Button("Ürünü kaydet", true); save.Click += (_, _) =>
         {
             if (!TryAmount(price.Text, out var amount)) { Error.Text = "Geçerli bir fiyat girin. Örnek: 145,50"; return; }
-            var changed = new Product { Id = product.Id, Name = name.Text.Trim(), Description = description.Text.Trim(), Category = (string)category.SelectedItem, Price = amount, Art = (string)artwork.SelectedItem, Color = product.Color, Available = available.IsChecked == true, Featured = featured.IsChecked == true };
+            var changed = new Product { Id = product.Id, Allergens = allergens.Text.Trim(), Name = name.Text.Trim(), Description = description.Text.Trim(), Category = (string)category.SelectedItem, Price = amount, Art = product.Art, PhotoKey = (string?)artwork.SelectedValue ?? "latte", Color = product.Color, Available = available.IsChecked == true, Featured = featured.IsChecked == true };
             if (vm.Run(() => vm.Service.SaveProduct(changed), "Ürün kaydedildi.")) Close(); else Error.Text = vm.Notice;
         };
         FinishActions(save);
@@ -91,6 +97,7 @@ public sealed class PaymentDialog : AtelierDialog
         var order = vm.CurrentOrder!; var remaining = order.Remaining;
         var total = new StackPanel { Margin = new Thickness(18) }; total.Children.Add(new TextBlock { Text = "KALAN HESAP", FontSize = 10, Foreground = Brushes.DimGray }); total.Children.Add(new TextBlock { Text = Money.Format(remaining), FontSize = 36, Margin = new Thickness(0, 6, 0, 0), FontWeight = FontWeights.SemiBold });
         Body.Children.Add(new Border { Background = new SolidColorBrush(Color.FromRgb(237, 229, 216)), CornerRadius = new CornerRadius(12), Child = total });
+        var posTest = Button("POS test merkezi · Gerçek tahsilat yapmaz"); posTest.Margin = new Thickness(0,10,0,8); posTest.Click += (_, _) => new PosDialog(vm, remaining) { Owner = this }.ShowDialog();
         var method = Choice(["Nakit", "Kart", "Diğer"], "Nakit"); Body.Children.Add(Label("Tahsilat yöntemi")); Body.Children.Add(method);
         Body.Children.Add(Label("Alınacak tutar (₺)")); var amount = new TextBox { Text = remaining.ToString("0.00", Money.Turkish), FontSize = 23, MaxLength = 12 }; Body.Children.Add(amount);
         System.Windows.Automation.AutomationProperties.SetName(method, "Tahsilat yöntemi");
@@ -109,12 +116,13 @@ public sealed class PaymentDialog : AtelierDialog
         amount.GotKeyboardFocus += (_, _) => { amount.SelectAll(); replace = true; };
         Body.Children.Add(keypad);
         Body.Children.Add(new TextBlock { Text = "Kısmi tutar alarak hesabı bölebilirsiniz. Kart seçimi yalnızca tahsilat kaydı oluşturur; cihazdan ödeme çekmez.", TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DimGray, FontSize = 11, Margin = new Thickness(0, 10, 0, 0) });
-        if (order.Payments.Count > 0) Body.Children.Add(new TextBlock { Text = "Önceki tahsilatlar: " + string.Join(" · ", order.Payments.Select(p => p.Method + " " + Money.Format(p.Amount))), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
+        if (order.Payments.Count > 0) Body.Children.Add(new TextBlock { Text = "Önceki tahsilatlar: " + string.Join(" · ", order.Payments.Select(p => (p.Payer==""?"":p.Payer+" · ") + p.Method + " " + Money.Format(p.Amount))), FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0) });
+        var payer=new TextBox {MaxLength=80};
         var pay = Button("Tahsilatı kaydet", true); pay.Click += (_, _) =>
         {
             if (!TryAmount(amount.Text, out var value) || value > remaining) { Error.Text = "Tutar 0'dan büyük, kalan hesaba eşit veya daha küçük olmalı."; return; }
             pay.IsEnabled = false;
-            if (vm.Run(() => vm.Service.Pay(order.Id, value, (string)method.SelectedItem), value == remaining ? "Hesap kapatıldı. Masa yeni misafirler için hazır." : "Kısmi tahsilat kaydedildi. Kalan tutar adisyonda.")) Close();
+            if (vm.Run(() => vm.Service.Pay(order.Id, value, (string)method.SelectedItem, payer.Text), value == remaining ? "Hesap kapatıldı. Masa yeni misafirler için hazır." : "Kısmi tahsilat kaydedildi. Kalan tutar adisyonda.")) Close();
             else { Error.Text = vm.Notice; pay.IsEnabled = true; }
         };
         FinishActions(pay);
@@ -124,7 +132,7 @@ public sealed class PaymentDialog : AtelierDialog
         var paymentGrid = new Grid(); paymentGrid.ColumnDefinitions.Add(new() { Width = new GridLength(268) }); paymentGrid.ColumnDefinitions.Add(new() { Width = new GridLength(18) }); paymentGrid.ColumnDefinitions.Add(new());
         var details = new StackPanel(); foreach (var field in fields.Take(6)) details.Children.Add(field);
         paymentGrid.Children.Add(details); Grid.SetColumn(keypad, 2); paymentGrid.Children.Add(keypad);
-        Body.Children.Add(paymentGrid); foreach (var field in fields.Skip(7)) Body.Children.Add(field);
+        Body.Children.Add(paymentGrid); foreach (var field in fields.Skip(7)) Body.Children.Add(field); Body.Children.Add(posTest); Body.Children.Add(Label("Ödeyen kişi (isteğe bağlı)")); Body.Children.Add(payer);
     }
 }
 

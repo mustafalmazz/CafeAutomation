@@ -25,6 +25,9 @@ public partial class MainWindow : Window
         ViewModel = new MainViewModel(service);
         DataContext = ViewModel;
         ViewModel.ProductRequested = (p, edit) => ShowDialog(new ProductDialog(ViewModel, p, edit));
+        ViewModel.OperationsRequested = section => ViewModel.Run(() => { if (section == "QR menü & istekler") ShowDialog(new GuestMenuDialog(ViewModel)); else ShowDialog(new OperationsDialog(ViewModel, section)); }, "İşletme çalışma alanı.");
+        Closed += async (_, _) => await ViewModel.GuestServer.DisposeAsync();
+        ViewModel.PosRequested = () => ShowDialog(new PosDialog(ViewModel));
         ViewModel.PaymentRequested = () => ShowDialog(new PaymentDialog(ViewModel));
         ViewModel.MoveRequested = () => ShowDialog(new MoveDialog(ViewModel));
         ViewModel.BackupRequested = SaveBackup;
@@ -76,13 +79,12 @@ public partial class MainWindow : Window
         var dialog = new SaveFileDialog { Title = "Yedek kopyasını kaydet", Filter = "Atelier kayıt dosyası (*.json)|*.json", FileName = "atelier-yedek-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json" };
         if (dialog.ShowDialog(this) == true) ViewModel.Run(() =>
         {
-            if (Path.GetFullPath(dialog.FileName).Equals(Path.GetFullPath(ViewModel.DataPath), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Yedeği asıl kayıt dosyasından farklı bir konuma kaydedin.");
-            File.Copy(ViewModel.DataPath, dialog.FileName, true);
+            ViewModel.Service.ExportBackup(dialog.FileName);
         }, "Yedek kopyası kaydedildi.");
     }
     private void ExportSales()
     {
-        var dialog = new SaveFileDialog { Title = "Günlük adisyon raporu", Filter = "CSV (*.csv)|*.csv", FileName = "atelier-satis-" + DateTime.Now.ToString("yyyyMMdd") + ".csv" };
+        var dialog = new SaveFileDialog { Title = "Dönem adisyon raporu", Filter = "CSV (*.csv)|*.csv", FileName = "atelier-satis-" + ViewModel.ReportStart.ToString("yyyyMMdd") + "-" + ViewModel.ReportEndExclusive.AddDays(-1).ToString("yyyyMMdd") + ".csv" };
         if (dialog.ShowDialog(this) != true) return;
         ViewModel.Run(() =>
         {
@@ -90,7 +92,7 @@ public partial class MainWindow : Window
             var rows = new List<string> { "Adisyon;Masa;Kapanış;Ödeme yöntemleri;Toplam" };
             rows.AddRange(ViewModel.Sales.Select(s => string.Join(";", new[] { s.Number, s.Table, s.Time, s.Methods, s.Total }.Select(Cell))));
             File.WriteAllLines(dialog.FileName, rows, new UTF8Encoding(true));
-        }, "Günlük adisyon raporu dışa aktarıldı.");
+        }, "Dönem adisyon raporu dışa aktarıldı.");
     }
     private void PrintOrder()
     {
@@ -98,13 +100,14 @@ public partial class MainWindow : Window
         ViewModel.Run(() =>
         {
             var dialog = new PrintDialog();
+            if (!string.IsNullOrWhiteSpace(ViewModel.Service.State.ReceiptPrinter)) { try { using var server = new System.Printing.LocalPrintServer(); dialog.PrintQueue=server.GetPrintQueue(ViewModel.Service.State.ReceiptPrinter); } catch { throw new InvalidOperationException("Kayıtlı yazıcı bulunamadı. Yazıcı ayarlarını kontrol edin."); } }
             if (dialog.ShowDialog() != true) return;
             var document = new FlowDocument { FontFamily = new FontFamily("Segoe UI"), FontSize = 11, PagePadding = new Thickness(12), ColumnWidth = double.PositiveInfinity };
             document.Blocks.Add(new Paragraph(new Run(ViewModel.BusinessName)) { FontSize = 19, FontWeight = FontWeights.SemiBold });
             document.Blocks.Add(new Paragraph(new Run($"{ViewModel.TableName} · #{order.Number}\n{DateTime.Now:dd.MM.yyyy HH:mm}\nHESAP DÖKÜMÜ — MALİ FİŞ DEĞİLDİR")));
-            foreach (var line in order.Lines) document.Blocks.Add(new Paragraph(new Run($"{line.Quantity} × {line.Name}    {Money.Format(line.Total)}\n{line.Options}")));
+            foreach (var line in order.Lines.Where(l=>l.Status!="İptal")) document.Blocks.Add(new Paragraph(new Run($"{line.Quantity} × {line.Name}    {Money.Format(line.Total)}\n{line.Options}")));
             document.Blocks.Add(new Paragraph(new Run($"Toplam: {Money.Format(order.Total)}\nTahsil edilen: {Money.Format(order.Paid)}\nKalan: {Money.Format(order.Remaining)}")) { FontWeight = FontWeights.SemiBold });
-            document.PageWidth = dialog.PrintableAreaWidth; document.PageHeight = dialog.PrintableAreaHeight;
+            var paper=ViewModel.Service.State.ReceiptPaper; document.PageWidth = paper=="A4"?dialog.PrintableAreaWidth:Math.Min(dialog.PrintableAreaWidth,(paper=="58 mm"?58:80)*96/25.4); document.PageHeight = dialog.PrintableAreaHeight;
             dialog.PrintDocument(((IDocumentPaginatorSource)document).DocumentPaginator, "Atelier hesap dökümü #" + order.Number);
         }, "Yazdırma penceresi kapatıldı.");
     }
